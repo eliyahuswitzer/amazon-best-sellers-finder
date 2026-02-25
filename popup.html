@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Amazon Best Sellers Finder</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      width: 280px;
+      padding: 16px;
+      background: #fff;
+      color: #111;
+    }
+    h1 {
+      font-size: 15px;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    p.sub {
+      font-size: 12px;
+      color: #555;
+      margin-bottom: 14px;
+    }
+    a.btn {
+      display: block;
+      background: #ff9900;
+      color: #111;
+      font-weight: bold;
+      font-size: 14px;
+      text-align: center;
+      padding: 10px;
+      border-radius: 8px;
+      text-decoration: none;
+      margin-bottom: 10px;
+    }
+    a.btn:hover { background: #e68a00; }
+    .status {
+      font-size: 12px;
+      color: #888;
+      text-align: center;
+    }
+    .status.detected { color: #2a7a2a; }
+  </style>
+</head>
+<body>
+  <h1>📊 Best Sellers Finder</h1>
+  <p class="sub">Jump to the Best Sellers list for the category you're browsing.</p>
+  <a id="bestsellers-link" class="btn" href="#" target="_blank">View Best Sellers →</a>
+  <p id="status" class="status">Navigate to an Amazon page to use this extension.</p>
+  <script src="popup.js"></script>
+</body>
+</html>
