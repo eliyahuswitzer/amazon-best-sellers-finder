@@ -2,184 +2,190 @@
 // To update the affiliate tag, change the value below:
 const AFFILIATE_TAG = "andrewswitzer-20";
 
-// Listen for messages from popup.js
+// ─── SETUP ───────────────────────────────────────────────────────────────────
+
+const currentUrl = window.location.href;
+const isSearchPage = /\/s[\/?]/.test(currentUrl) || currentUrl.includes("field-keywords");
+const isProductPage = /\/dp\/[A-Z0-9]{10}/.test(currentUrl);
+
+// Listen for popup requests
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "getBestSellersUrl") {
-    const result = getBestSellersUrl();
-    sendResponse(result);
+    getResult().then(sendResponse);
+    return true; // keep channel open for async response
   }
 });
 
-// Only inject button on search or product pages
-const currentUrl = window.location.href;
-const isSearchPage = currentUrl.includes("/s?") || /\/s\//.test(currentUrl);
-const isProductPage = /\/dp\/[A-Z0-9]{10}/.test(currentUrl);
-
 if (isSearchPage || isProductPage) {
-  injectButton();
+  init();
 }
 
-// ─── NODE DETECTION ──────────────────────────────────────────────────────────
+// ─── INIT ────────────────────────────────────────────────────────────────────
 
-function getBestSellersUrl() {
-  const nodeInfo = detectNode();
-  if (nodeInfo && nodeInfo.nodeId) {
-    const url = `https://www.amazon.com/gp/bestsellers/?node=${nodeInfo.nodeId}&tag=${AFFILIATE_TAG}`;
-    return { url, detected: true, label: nodeInfo.label || null };
+async function init() {
+  // Inject button immediately with a loading state
+  const btn = injectButton("📊 Finding Best Sellers…", "#");
+
+  const result = await getResult();
+  btn.href = result.url;
+  btn.innerText = result.label
+    ? `📊 Best Sellers: ${result.label}`
+    : "📊 Best Sellers";
+  btn.title = result.url;
+}
+
+// ─── MAIN DETECTION ──────────────────────────────────────────────────────────
+
+async function getResult() {
+  // 1. Try fast in-page detection first (works on product pages + dept-filtered searches)
+  const fast = detectFromPage();
+  if (fast) return fast;
+
+  // 2. For search pages: fetch the first product's page to get its category
+  if (isSearchPage) {
+    const fromProduct = await detectFromFirstProduct();
+    if (fromProduct) return fromProduct;
   }
+
+  // 3. Fallback: top-level Best Sellers
   return {
     url: `https://www.amazon.com/gp/bestsellers/?tag=${AFFILIATE_TAG}`,
-    detected: false,
     label: null,
+    detected: false,
   };
 }
 
-function detectNode() {
-  // Try strategies in order of specificity, return first match
+// ─── FAST (IN-PAGE) DETECTION ────────────────────────────────────────────────
 
-  // 1. Current URL has rh=n%3AXXXXX (e.g. after clicking a department in sidebar)
-  //    Amazon encodes the node as n:XXXXX inside the rh parameter
-  const fromRh = extractNodeFromRh(window.location.href);
-  if (fromRh) return fromRh;
-
-  // 2. Current URL has plain node= param
-  const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.get("node")) {
-    return { nodeId: urlParams.get("node") };
+function detectFromPage() {
+  // A. Current URL has rh=n:XXXXX (dept-filtered search)
+  const rhNode = extractNodeFromRh(window.location.href);
+  if (rhNode) {
+    return {
+      url: `https://www.amazon.com/gp/bestsellers/?node=${rhNode.nodeId}&tag=${AFFILIATE_TAG}`,
+      label: null,
+      detected: true,
+    };
   }
 
-  // 3. Hidden input #searchNodeID (Amazon sometimes puts this on search pages)
-  const hiddenNode = document.getElementById("searchNodeID");
-  if (hiddenNode && hiddenNode.value) {
-    return { nodeId: hiddenNode.value };
+  // B. Current URL has node= param
+  const nodeParam = new URLSearchParams(window.location.search).get("node");
+  if (nodeParam) {
+    return {
+      url: `https://www.amazon.com/gp/bestsellers/?node=${nodeParam}&tag=${AFFILIATE_TAG}`,
+      label: null,
+      detected: true,
+    };
   }
 
-  // 4. Sidebar department/category links containing rh=n%3A
-  //    These appear in the left panel under "Department", "Category" etc.
-  //    Pick the most specific (deepest) one available.
-  const sidebarNode = extractNodeFromSidebarLinks();
-  if (sidebarNode) return sidebarNode;
-
-  // 5. Breadcrumb links: /b?node=XXXXX or /b/?node=XXXXX
-  const breadcrumbNode = extractNodeFromBreadcrumbs();
-  if (breadcrumbNode) return breadcrumbNode;
-
-  // 6. Product page — Best Sellers Rank links that go to /zgbs/
-  const zgbsNode = extractNodeFromZgbsLinks();
-  if (zgbsNode) return zgbsNode;
+  // C. Product page: look for zgbs links directly in the DOM
+  //    (Best Sellers Rank section links directly to the category zgbs page)
+  const zgbsLinks = document.querySelectorAll('a[href*="/zgbs/"]');
+  for (const a of zgbsLinks) {
+    const result = buildResultFromZgbsHref(a.href, a.innerText.trim());
+    if (result) return result;
+  }
 
   return null;
 }
 
-// Pulls n:XXXXX out of the rh= URL parameter (handles encoded and decoded forms)
+// ─── ASYNC DETECTION (FIRST PRODUCT PAGE FETCH) ──────────────────────────────
+
+async function detectFromFirstProduct() {
+  // Get the first product ASIN from search results
+  const firstResult = document.querySelector(
+    '[data-component-type="s-search-result"][data-asin]'
+  );
+  if (!firstResult) return null;
+
+  const asin = firstResult.dataset.asin;
+  if (!asin || asin.length < 5) return null;
+
+  try {
+    const response = await fetch(`https://www.amazon.com/dp/${asin}`, {
+      credentials: "include",
+      headers: { Accept: "text/html" },
+    });
+    if (!response.ok) return null;
+
+    const html = await response.text();
+
+    // Extract all zgbs hrefs from the raw HTML using regex
+    // (DOMParser not used to keep this lightweight)
+    const zgbsRegex = /href="(\/[^"]*\/zgbs\/[^"]+)"/g;
+    let match;
+    while ((match = zgbsRegex.exec(html)) !== null) {
+      const fullHref = "https://www.amazon.com" + match[1];
+      const result = buildResultFromZgbsHref(fullHref, null);
+      if (result) return result;
+    }
+  } catch (e) {
+    // Silently fail — network error, CORS, etc.
+  }
+
+  return null;
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+// Given a zgbs URL, build our result object with affiliate tag
+function buildResultFromZgbsHref(href, linkText) {
+  try {
+    const url = new URL(href);
+    const parts = url.pathname.split("/").filter(Boolean);
+    const zgbsIdx = parts.indexOf("zgbs");
+    if (zgbsIdx === -1) return null;
+
+    const dept = parts[zgbsIdx + 1];
+    const nodeId = parts[zgbsIdx + 2];
+    if (!dept || !nodeId || !/^\d+$/.test(nodeId)) return null;
+
+    // Build clean label from the first path segment (e.g. "Best-Sellers-Hair-Combs")
+    const rawSlug = parts[0] || "";
+    const label =
+      linkText?.slice(0, 40) ||
+      rawSlug
+        .replace(/^Best-Sellers-?/i, "")
+        .replace(/-/g, " ")
+        .trim() ||
+      null;
+
+    return {
+      url: `https://www.amazon.com/${rawSlug}/zgbs/${dept}/${nodeId}?tag=${AFFILIATE_TAG}`,
+      label,
+      detected: true,
+      nodeId,
+      dept,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+// Extract n:XXXXX node from rh= URL parameter
 function extractNodeFromRh(urlStr) {
   try {
-    const params = new URLSearchParams(new URL(urlStr).search);
-    const rh = params.get("rh");
+    const rh = new URL(urlStr).searchParams.get("rh");
     if (!rh) return null;
-
-    // rh can look like "n:3760901" or "n:3760901,p_n_feature_two_browse-bin:..."
-    // It may be URL-encoded as "n%3A3760901"
-    const decoded = decodeURIComponent(rh);
-    const match = decoded.match(/(?:^|[,|])n:(\d+)/);
+    const match = decodeURIComponent(rh).match(/(?:^|[,|])n:(\d+)/);
     if (match) return { nodeId: match[1] };
   } catch (e) {}
   return null;
 }
 
-// Looks at ALL links on the page for rh=n%3A patterns (sidebar, filters, etc.)
-// Prefers links inside known sidebar/filter containers; falls back to any link.
-function extractNodeFromSidebarLinks() {
-  // Selectors that typically contain the sidebar filter links on Amazon search pages
-  const containerSelectors = [
-    "#departments",
-    "#filters",
-    "#s-refinements",
-    ".s-refinement-container",
-    "[data-cel-widget='left-pane']",
-    "#leftNav",
-    ".a-section.a-spacing-none.a-spacing-top-micro",
-  ];
+// ─── BUTTON ──────────────────────────────────────────────────────────────────
 
-  let candidates = [];
-
-  for (const sel of containerSelectors) {
-    const container = document.querySelector(sel);
-    if (!container) continue;
-    const links = container.querySelectorAll("a[href]");
-    links.forEach((a) => {
-      const node = extractNodeFromRh(a.href);
-      if (node) {
-        // Try to grab the visible label for this link
-        node.label = a.innerText.trim() || null;
-        candidates.push(node);
-      }
-    });
-    if (candidates.length > 0) break;
+function injectButton(label, href) {
+  if (document.getElementById("amz-bestsellers-btn")) {
+    return document.getElementById("amz-bestsellers-btn");
   }
-
-  // If nothing found in known containers, scan ALL links on page
-  if (candidates.length === 0) {
-    document.querySelectorAll("a[href]").forEach((a) => {
-      const node = extractNodeFromRh(a.href);
-      if (node) {
-        node.label = a.innerText.trim() || null;
-        candidates.push(node);
-      }
-    });
-  }
-
-  // Prefer the most specific node: heuristically the one with the longest
-  // matching text or just pick the first one
-  return candidates.length > 0 ? candidates[0] : null;
-}
-
-// Looks for breadcrumb links like /b?node=XXXX
-function extractNodeFromBreadcrumbs() {
-  const crumbs = document.querySelectorAll('a[href*="/b?node="], a[href*="/b/?node="]');
-  if (crumbs.length === 0) return null;
-  // Most specific = last breadcrumb
-  const last = crumbs[crumbs.length - 1];
-  const nodeParam = new URL(last.href).searchParams.get("node");
-  if (nodeParam) return { nodeId: nodeParam, label: last.innerText.trim() || null };
-  return null;
-}
-
-// Product pages: Best Sellers Rank links go to /zgbs/DEPT/NODE
-function extractNodeFromZgbsLinks() {
-  const rankLinks = document.querySelectorAll('a[href*="/zgbs/"]');
-  if (rankLinks.length === 0) return null;
-  for (const a of rankLinks) {
-    try {
-      const pathParts = new URL(a.href).pathname.split("/").filter(Boolean);
-      const zgbsIdx = pathParts.indexOf("zgbs");
-      if (zgbsIdx !== -1 && pathParts[zgbsIdx + 2]) {
-        return {
-          nodeId: pathParts[zgbsIdx + 2],
-          dept: pathParts[zgbsIdx + 1] || null,
-          label: a.innerText.trim() || null,
-        };
-      }
-    } catch (e) {}
-  }
-  return null;
-}
-
-// ─── BUTTON INJECTION ────────────────────────────────────────────────────────
-
-function injectButton() {
-  if (document.getElementById("amz-bestsellers-btn")) return;
-
-  const { url, detected, label } = getBestSellersUrl();
-  const btnLabel = detected && label ? `📊 Best Sellers: ${label}` : "📊 Best Sellers";
 
   const btn = document.createElement("a");
   btn.id = "amz-bestsellers-btn";
-  btn.href = url;
+  btn.href = href;
   btn.target = "_blank";
   btn.rel = "noopener noreferrer";
-  btn.title = "View Best Sellers in this category";
-  btn.innerText = btnLabel;
+  btn.innerText = label;
 
   Object.assign(btn.style, {
     position: "fixed",
@@ -198,7 +204,7 @@ function injectButton() {
     opacity: "0.82",
     transition: "opacity 0.2s, transform 0.2s",
     cursor: "pointer",
-    maxWidth: "280px",
+    maxWidth: "300px",
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",
@@ -214,15 +220,5 @@ function injectButton() {
   });
 
   document.body.appendChild(btn);
-
-  // Re-run detection after a short delay — Amazon sometimes loads sidebar reactively
-  setTimeout(() => {
-    const updated = getBestSellersUrl();
-    if (updated.detected && updated.url !== url) {
-      btn.href = updated.url;
-      if (updated.label) {
-        btn.innerText = `📊 Best Sellers: ${updated.label}`;
-      }
-    }
-  }, 2000);
+  return btn;
 }
