@@ -41,10 +41,10 @@ async function getResult() {
   const fast = detectFromPage();
   if (fast) return fast;
 
-  // 2. For search pages: fetch the first product's page to get its category
+  // 2. For search pages: sample multiple products to find the most common category
   if (isSearchPage) {
-    const fromProduct = await detectFromFirstProduct();
-    if (fromProduct) return fromProduct;
+    const fromProducts = await detectFromSearchProducts();
+    if (fromProducts) return fromProducts;
   }
 
   // 3. Fallback: top-level Best Sellers
@@ -89,47 +89,66 @@ function detectFromPage() {
   return null;
 }
 
-// ─── ASYNC DETECTION (FIRST PRODUCT PAGE FETCH) ──────────────────────────────
+// ─── ASYNC DETECTION (SAMPLE MULTIPLE PRODUCTS) ─────────────────────────────
 
-async function detectFromFirstProduct() {
-  // Get the first product ASIN from search results
-  const firstResult = document.querySelector(
+async function detectFromSearchProducts() {
+  // Grab ASINs from the first several search results
+  const resultEls = document.querySelectorAll(
     '[data-component-type="s-search-result"][data-asin]'
   );
-  if (!firstResult) return null;
+  const asins = [];
+  for (const el of resultEls) {
+    const asin = el.dataset.asin;
+    if (asin && asin.length >= 5) asins.push(asin);
+    if (asins.length >= 5) break;
+  }
+  if (asins.length === 0) return null;
 
-  const asin = firstResult.dataset.asin;
-  if (!asin || asin.length < 5) return null;
+  // Fetch product pages in parallel and collect all zgbs categories
+  const allCategories = []; // { nodeId, dept, slug, label }
+  await Promise.allSettled(
+    asins.map(async (asin) => {
+      try {
+        const resp = await fetch(`https://www.amazon.com/dp/${asin}`, {
+          credentials: "include",
+          headers: { Accept: "text/html" },
+        });
+        if (!resp.ok) return;
+        const html = await resp.text();
 
-  try {
-    const response = await fetch(`https://www.amazon.com/dp/${asin}`, {
-      credentials: "include",
-      headers: { Accept: "text/html" },
-    });
-    if (!response.ok) return null;
+        const zgbsRegex = /href="(\/[^"]*\/zgbs\/[^"]+)"/g;
+        let match;
+        while ((match = zgbsRegex.exec(html)) !== null) {
+          const fullHref = "https://www.amazon.com" + match[1];
+          const parsed = parseZgbsHref(fullHref);
+          if (parsed) allCategories.push(parsed);
+        }
+      } catch (e) {
+        // Silently fail for this product
+      }
+    })
+  );
 
-    const html = await response.text();
+  if (allCategories.length === 0) return null;
 
-    // Extract all zgbs hrefs from the raw HTML using regex
-    // (DOMParser not used to keep this lightweight)
-    const zgbsRegex = /href="(\/[^"]*\/zgbs\/[^"]+)"/g;
-    let match;
-    while ((match = zgbsRegex.exec(html)) !== null) {
-      const fullHref = "https://www.amazon.com" + match[1];
-      const result = buildResultFromZgbsHref(fullHref, null);
-      if (result) return result;
-    }
-  } catch (e) {
-    // Silently fail — network error, CORS, etc.
+  // Count how often each nodeId appears across products and pick the most common
+  const counts = {};
+  for (const cat of allCategories) {
+    counts[cat.nodeId] = (counts[cat.nodeId] || 0) + 1;
   }
 
-  return null;
+  // Sort by frequency (desc), then prefer deeper/more-specific nodes
+  const ranked = Object.entries(counts).sort(
+    ([aId, aCount], [bId, bCount]) => bCount - aCount || bId.length - aId.length
+  );
+
+  const bestNodeId = ranked[0][0];
+  const best = allCategories.find((c) => c.nodeId === bestNodeId);
+  return buildResultFromParsed(best);
 }
 
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
-
-// Given a zgbs URL, build our result object with affiliate tag
-function buildResultFromZgbsHref(href, linkText) {
+// Parse a zgbs href into its components (without building the final result)
+function parseZgbsHref(href) {
   try {
     const url = new URL(href);
     const parts = url.pathname.split("/").filter(Boolean);
@@ -140,26 +159,52 @@ function buildResultFromZgbsHref(href, linkText) {
     const nodeId = parts[zgbsIdx + 2];
     if (!dept || !nodeId || !/^\d+$/.test(nodeId)) return null;
 
-    // Build clean label from the first path segment (e.g. "Best-Sellers-Hair-Combs")
     const rawSlug = parts[0] || "";
-    const label =
-      linkText?.slice(0, 40) ||
-      rawSlug
-        .replace(/^Best-Sellers-?/i, "")
-        .replace(/-/g, " ")
-        .trim() ||
-      null;
-
-    return {
-      url: `https://www.amazon.com/${rawSlug}/zgbs/${dept}/${nodeId}?tag=${AFFILIATE_TAG}`,
-      label,
-      detected: true,
-      nodeId,
-      dept,
-    };
+    return { dept, nodeId, rawSlug };
   } catch (e) {
     return null;
   }
+}
+
+// Build the final result object from a parsed category
+function buildResultFromParsed(parsed) {
+  const label =
+    parsed.rawSlug
+      .replace(/^Best-Sellers-?/i, "")
+      .replace(/-/g, " ")
+      .trim() || null;
+
+  return {
+    url: `https://www.amazon.com/${parsed.rawSlug}/zgbs/${parsed.dept}/${parsed.nodeId}?tag=${AFFILIATE_TAG}`,
+    label,
+    detected: true,
+    nodeId: parsed.nodeId,
+    dept: parsed.dept,
+  };
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+// Given a zgbs URL, build our result object with affiliate tag
+function buildResultFromZgbsHref(href, linkText) {
+  const parsed = parseZgbsHref(href);
+  if (!parsed) return null;
+
+  const label =
+    linkText?.slice(0, 40) ||
+    parsed.rawSlug
+      .replace(/^Best-Sellers-?/i, "")
+      .replace(/-/g, " ")
+      .trim() ||
+    null;
+
+  return {
+    url: `https://www.amazon.com/${parsed.rawSlug}/zgbs/${parsed.dept}/${parsed.nodeId}?tag=${AFFILIATE_TAG}`,
+    label,
+    detected: true,
+    nodeId: parsed.nodeId,
+    dept: parsed.dept,
+  };
 }
 
 // Extract n:XXXXX node from rh= URL parameter
