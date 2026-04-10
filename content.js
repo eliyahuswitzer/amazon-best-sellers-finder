@@ -8,6 +8,13 @@ const currentUrl = window.location.href;
 const isSearchPage = /\/s[\/?]/.test(currentUrl) || currentUrl.includes("field-keywords");
 const isProductPage = /\/dp\/[A-Z0-9]{10}/.test(currentUrl);
 
+// Tracks the loading button's dot animation so renderStack() can cancel it
+// when real results arrive. Must be declared here (not next to renderStack
+// below) because init() is called synchronously before the script reaches
+// this file's later `let` declarations — accessing a `let` in its temporal
+// dead zone throws ReferenceError and bricks the extension.
+let loadingAnimationInterval = null;
+
 // Listen for popup requests
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "getBestSellersUrl") {
@@ -266,11 +273,6 @@ function extractNodeFromRh(urlStr) {
 }
 
 // ─── BUTTON STACK ────────────────────────────────────────────────────────────
-
-// Tracks the "…" animation on the loading button so we can cancel it the
-// moment real results arrive. Module-scoped so any renderStack call can
-// find and clear it.
-let loadingAnimationInterval = null;
 
 // Render the floating button stack: one primary button + up to N alternatives.
 // `primary` is either a result object or null (null = loading state).
