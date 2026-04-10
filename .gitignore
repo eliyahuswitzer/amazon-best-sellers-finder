@@ -20,3 +20,10 @@ Thumbs.db
 
 # Node (in case you add JS tooling later)
 node_modules/
+
+# Packaged extension bundles (built from source, don't track)
+*.zip
+
+# Raw DevTools screenshot captures — they land at 2x size on HiDPI displays.
+# We only keep the resized versions that match Chrome Web Store dimensions.
+store-assets/_*.png
