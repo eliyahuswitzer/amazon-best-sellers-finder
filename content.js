@@ -41,10 +41,11 @@ async function getResult() {
   const fast = detectFromPage();
   if (fast) return fast;
 
-  // 2. For search pages: sample multiple products to find the most common category
+  // 2. For search pages: look at "Best Seller" badges on the results —
+  //    those are ground truth (Amazon itself is saying "this is #1 in X")
   if (isSearchPage) {
-    const fromProducts = await detectFromSearchProducts();
-    if (fromProducts) return fromProducts;
+    const fromBadges = await detectFromBadgedProducts();
+    if (fromBadges) return fromBadges;
   }
 
   // 3. Fallback: top-level Best Sellers
@@ -89,65 +90,126 @@ function detectFromPage() {
   return null;
 }
 
-// ─── ASYNC DETECTION (SAMPLE MULTIPLE PRODUCTS) ─────────────────────────────
+// ─── BADGE-BASED DETECTION (SEARCH PAGES) ───────────────────────────────────
+//
+// Strategy: Amazon marks products on the search results page with a
+// "Best Seller in {Category}" badge. Those badges are ground truth — the
+// product really is #1 in that category according to Amazon itself. We use
+// those products as our seed list (instead of random top-of-page items
+// which are often sponsored ads for unrelated categories).
+//
+// For each unique category name found in badge aria-labels, we fetch ONE
+// representative product page and scrape the node ID from its "Best Sellers
+// Rank" section. One fetch per distinct category is enough — all products
+// with the same badge text land in the same zgbs node.
 
-async function detectFromSearchProducts() {
-  // Grab ASINs from the first several search results
-  const resultEls = document.querySelectorAll(
-    '[data-component-type="s-search-result"][data-asin]'
+async function detectFromBadgedProducts() {
+  // Amazon renders each badge 2-3 times per product (main badge,
+  // rio-badge-component, rio-badge-supplementary-group) — dedupe by ASIN.
+  const badgeEls = document.querySelectorAll(
+    '[class*="rio-badge-component"], div#BEST_SELLER'
   );
-  const asins = [];
-  for (const el of resultEls) {
-    const asin = el.dataset.asin;
-    if (asin && asin.length >= 5) asins.push(asin);
-    if (asins.length >= 5) break;
-  }
-  if (asins.length === 0) return null;
 
-  // Fetch product pages in parallel and collect all zgbs categories
-  const allCategories = []; // { nodeId, dept, slug, label }
-  await Promise.allSettled(
-    asins.map(async (asin) => {
+  // Group by category name. For each unique category, remember the first
+  // ASIN we saw (our "representative") and count how many distinct products
+  // are best sellers in it — that count becomes the tiebreaker later.
+  const byCategory = new Map(); // categoryName -> { count, asin }
+  const seenAsinCategory = new Set(); // "asin::category" dedupe key
+
+  for (const badge of badgeEls) {
+    if (!/best\s*seller/i.test(badge.textContent)) continue;
+
+    const card = badge.closest("[data-asin]");
+    const asin = card?.dataset.asin;
+    if (!asin || asin.length < 5) continue;
+
+    // The category name lives in the child span's aria-label, e.g.
+    // aria-label="in Manual Toothbrushes". Much cleaner than textContent
+    // which concatenates "Best Seller" + "in Manual Toothbrushes".
+    const inLabel = badge.querySelector('[aria-label^="in "]');
+    const categoryName = inLabel
+      ?.getAttribute("aria-label")
+      ?.replace(/^in\s+/i, "")
+      .trim();
+    if (!categoryName) continue;
+
+    const dedupeKey = `${asin}::${categoryName}`;
+    if (seenAsinCategory.has(dedupeKey)) continue;
+    seenAsinCategory.add(dedupeKey);
+
+    const entry = byCategory.get(categoryName) || { count: 0, asin };
+    entry.count++;
+    byCategory.set(categoryName, entry);
+  }
+
+  if (byCategory.size === 0) return null;
+
+  // Fetch one representative product per unique category and extract the
+  // real zgbs (dept, nodeId) from its Best Sellers Rank section.
+  const resolved = await Promise.all(
+    [...byCategory.entries()].map(async ([categoryName, { count, asin }]) => {
       try {
         const resp = await fetch(`https://www.amazon.com/dp/${asin}`, {
           credentials: "include",
           headers: { Accept: "text/html" },
         });
-        if (!resp.ok) return;
+        if (!resp.ok) return null;
         const html = await resp.text();
 
-        const zgbsRegex = /href="(\/[^"]*\/zgbs\/[^"]+)"/g;
-        let match;
-        while ((match = zgbsRegex.exec(html)) !== null) {
-          const fullHref = "https://www.amazon.com" + match[1];
-          const parsed = parseZgbsHref(fullHref);
-          if (parsed) allCategories.push(parsed);
-        }
+        // Isolate the "Best Sellers Rank" section before matching. The rest
+        // of the page has navigation-menu zgbs links (e.g. "Best Sellers in
+        // Beauty") that would pollute the results — that's the exact bug
+        // the previous implementation had.
+        const bsrMatch = html.match(/Best Sellers Rank[\s\S]{0,3000}/i);
+        if (!bsrMatch) return null;
+
+        // Amazon uses two URL formats here:
+        //   /gp/bestsellers/{dept}/{nodeId}/...   ← most common in BSR
+        //   /{slug}/zgbs/{dept}/{nodeId}/...      ← older "pretty" URL
+        // Quotes can be single OR double. This regex handles all of that.
+        const linkRegex =
+          /href=['"][^'"]*(?:\/gp\/bestsellers|\/zgbs)\/([a-z]+)\/(\d+)[^'"]*['"]/gi;
+        const matches = [...bsrMatch[0].matchAll(linkRegex)];
+        if (matches.length === 0) return null;
+
+        // BSR lists rankings from broadest to most specific, e.g.
+        //   "#103 in Health & Household"
+        //   "#1 in Manual Toothbrushes"
+        // The LAST match is the most specific subcategory — what we want.
+        const last = matches[matches.length - 1];
+        return {
+          categoryName,
+          count,
+          dept: last[1],
+          nodeId: last[2],
+        };
       } catch (e) {
-        // Silently fail for this product
+        return null;
       }
     })
   );
 
-  if (allCategories.length === 0) return null;
+  const successful = resolved.filter(Boolean);
+  if (successful.length === 0) return null;
 
-  // Count how often each nodeId appears across products and pick the most common
-  const counts = {};
-  for (const cat of allCategories) {
-    counts[cat.nodeId] = (counts[cat.nodeId] || 0) + 1;
-  }
-
-  // Sort by frequency (desc), then prefer deeper/more-specific nodes
-  const ranked = Object.entries(counts).sort(
-    ([aId, aCount], [bId, bCount]) => bCount - aCount || bId.length - aId.length
+  // Pick the category with the most badged products. Tiebreaker: deeper
+  // (longer) node IDs tend to mean more specific subcategories.
+  successful.sort(
+    (a, b) => b.count - a.count || b.nodeId.length - a.nodeId.length
   );
+  const winner = successful[0];
 
-  const bestNodeId = ranked[0][0];
-  const best = allCategories.find((c) => c.nodeId === bestNodeId);
-  return buildResultFromParsed(best);
+  return {
+    url: `https://www.amazon.com/gp/bestsellers/${winner.dept}/${winner.nodeId}?tag=${AFFILIATE_TAG}`,
+    label: winner.categoryName,
+    detected: true,
+    nodeId: winner.nodeId,
+    dept: winner.dept,
+  };
 }
 
-// Parse a zgbs href into its components (without building the final result)
+// Parse a zgbs href into its components (still used by detectFromPage's
+// product-page path C, below).
 function parseZgbsHref(href) {
   try {
     const url = new URL(href);
@@ -164,23 +226,6 @@ function parseZgbsHref(href) {
   } catch (e) {
     return null;
   }
-}
-
-// Build the final result object from a parsed category
-function buildResultFromParsed(parsed) {
-  const label =
-    parsed.rawSlug
-      .replace(/^Best-Sellers-?/i, "")
-      .replace(/-/g, " ")
-      .trim() || null;
-
-  return {
-    url: `https://www.amazon.com/${parsed.rawSlug}/zgbs/${parsed.dept}/${parsed.nodeId}?tag=${AFFILIATE_TAG}`,
-    label,
-    detected: true,
-    nodeId: parsed.nodeId,
-    dept: parsed.dept,
-  };
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
