@@ -2,6 +2,12 @@
 
 A Chrome browser extension that detects the category you're browsing on Amazon and gives you a one-click shortcut to the Best Sellers list for that category — with your Amazon Associates affiliate tag built in.
 
+> **Note:** This repo intentionally contains **two related-but-separate tools** that both work with Amazon Best Sellers data:
+> 1. A **Chrome extension** (documented first — the main project) that helps you *navigate to* Best Sellers pages
+> 2. A **Python scraper** (`amazon_scrape.py`) that *extracts product data from* a Best Sellers page into a CSV — see [Python Scraper](#python-scraper) below
+>
+> They're kept in the same repo for convenience since they're both experiments on the same idea. They may split into separate repos later if either one grows.
+
 ## Features
 
 - 📊 Floating **"Best Sellers" button** on Amazon search and product pages
@@ -39,6 +45,27 @@ The tag is defined in **two places** — update both if you ever change your Ass
 3. Pay the one-time $5 developer fee (if not already done)
 4. Upload the zip and fill in the listing details
 5. Submit for review (~1-3 days)
+
+## Python Scraper
+
+`amazon_scrape.py` is a standalone Python script — **not part of the Chrome extension**. It scrapes product data directly from a specific Amazon Best Sellers page and saves the results to a CSV.
+
+**What it does:**
+- Fetches a hard-coded Best Sellers URL (currently Men's Button-Down Shirts)
+- Parses product name, link, rating, review count, and price using BeautifulSoup
+- Writes results to `amazon_best_sellers.csv`
+
+**Dependencies:**
+```bash
+pip install requests beautifulsoup4 pandas
+```
+
+**Running it:**
+```bash
+python amazon_scrape.py
+```
+
+The output CSV is `.gitignore`'d since it regenerates on every run.
 
 ## File Structure
 

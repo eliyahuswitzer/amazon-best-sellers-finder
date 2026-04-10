@@ -1,0 +1,22 @@
+# Claude Code local folder
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Scraper output (data files — regenerated each run)
+*.csv
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Node (in case you add JS tooling later)
+node_modules/
