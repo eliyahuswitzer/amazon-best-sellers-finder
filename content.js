@@ -23,15 +23,11 @@ if (isSearchPage || isProductPage) {
 // ─── INIT ────────────────────────────────────────────────────────────────────
 
 async function init() {
-  // Inject button immediately with a loading state
-  const btn = injectButton("📊 Finding Best Sellers…", "#");
+  // Show an immediate loading state so the user sees *something*
+  renderStack(null, []);
 
   const result = await getResult();
-  btn.href = result.url;
-  btn.innerText = result.label
-    ? `📊 Best Sellers: ${result.label}`
-    : "📊 Best Sellers";
-  btn.title = result.url;
+  renderStack(result, result.alternatives || []);
 }
 
 // ─── MAIN DETECTION ──────────────────────────────────────────────────────────
@@ -197,14 +193,20 @@ async function detectFromBadgedProducts() {
   successful.sort(
     (a, b) => b.count - a.count || b.nodeId.length - a.nodeId.length
   );
-  const winner = successful[0];
+  const [winner, ...rest] = successful;
+
+  // Build URLs for the primary + up to 4 alternative categories (5 total).
+  const toResult = (r) => ({
+    url: `https://www.amazon.com/gp/bestsellers/${r.dept}/${r.nodeId}?tag=${AFFILIATE_TAG}`,
+    label: r.categoryName,
+    nodeId: r.nodeId,
+    dept: r.dept,
+  });
 
   return {
-    url: `https://www.amazon.com/gp/bestsellers/${winner.dept}/${winner.nodeId}?tag=${AFFILIATE_TAG}`,
-    label: winner.categoryName,
+    ...toResult(winner),
     detected: true,
-    nodeId: winner.nodeId,
-    dept: winner.dept,
+    alternatives: rest.slice(0, 4).map(toResult),
   };
 }
 
@@ -263,41 +265,116 @@ function extractNodeFromRh(urlStr) {
   return null;
 }
 
-// ─── BUTTON ──────────────────────────────────────────────────────────────────
+// ─── BUTTON STACK ────────────────────────────────────────────────────────────
 
-function injectButton(label, href) {
-  if (document.getElementById("amz-bestsellers-btn")) {
-    return document.getElementById("amz-bestsellers-btn");
+// Tracks the "…" animation on the loading button so we can cancel it the
+// moment real results arrive. Module-scoped so any renderStack call can
+// find and clear it.
+let loadingAnimationInterval = null;
+
+// Render the floating button stack: one primary button + up to N alternatives.
+// `primary` is either a result object or null (null = loading state).
+// Always removes any existing stack first so calling this replaces the UI.
+function renderStack(primary, alternatives) {
+  // Cancel any running loading animation before we rebuild the stack.
+  if (loadingAnimationInterval) {
+    clearInterval(loadingAnimationInterval);
+    loadingAnimationInterval = null;
   }
 
-  const btn = document.createElement("a");
-  btn.id = "amz-bestsellers-btn";
-  btn.href = href;
-  btn.target = "_blank";
-  btn.rel = "noopener noreferrer";
-  btn.innerText = label;
+  document.getElementById("amz-bestsellers-stack")?.remove();
 
-  Object.assign(btn.style, {
+  const stack = document.createElement("div");
+  stack.id = "amz-bestsellers-stack";
+  Object.assign(stack.style, {
     position: "fixed",
     bottom: "24px",
     right: "24px",
     zIndex: "999999",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-end",
+    gap: "8px",
+    maxWidth: "320px",
+  });
+
+  // Primary button
+  let primaryLabel;
+  let primaryHref;
+  if (primary === null) {
+    // Start the dot animation at one dot — interval will cycle 1→2→3→1.
+    primaryLabel = "📊 Finding Best Sellers.";
+    primaryHref = "#";
+  } else {
+    primaryLabel = primary.label
+      ? `📊 Best Sellers: ${primary.label}`
+      : "📊 Best Sellers";
+    primaryHref = primary.url;
+  }
+  const primaryBtn = createButton({
+    label: primaryLabel,
+    href: primaryHref,
+    variant: "primary",
+  });
+  stack.appendChild(primaryBtn);
+
+  // Alternative buttons (up to 4 — primary + 4 = 5 total max)
+  for (const alt of alternatives.slice(0, 4)) {
+    stack.appendChild(
+      createButton({
+        label: `📊 ${alt.label}`,
+        href: alt.url,
+        variant: "secondary",
+      })
+    );
+  }
+
+  document.body.appendChild(stack);
+
+  // If this was a loading render, start the dot animation. Cycles
+  // "📊 Finding Best Sellers." → ".." → "..." → "." every 400ms until
+  // the next renderStack call clears the interval.
+  if (primary === null) {
+    const baseLabel = "📊 Finding Best Sellers";
+    let dots = 1;
+    loadingAnimationInterval = setInterval(() => {
+      dots = (dots % 3) + 1;
+      primaryBtn.innerText = baseLabel + ".".repeat(dots);
+    }, 400);
+  }
+}
+
+// Create a single pill button. Shared between primary and secondary variants;
+// secondary is visually lighter so the primary remains the clear focus.
+function createButton({ label, href, variant }) {
+  const isPrimary = variant === "primary";
+  const baseOpacity = isPrimary ? "0.82" : "0.72";
+
+  const btn = document.createElement("a");
+  btn.href = href;
+  btn.target = "_blank";
+  btn.rel = "noopener noreferrer";
+  btn.innerText = label;
+  btn.title = href;
+
+  Object.assign(btn.style, {
     background: "#ff9900",
     color: "#111",
     fontFamily: "Arial, sans-serif",
-    fontSize: "13px",
+    fontSize: isPrimary ? "13px" : "12px",
     fontWeight: "bold",
-    padding: "10px 16px",
+    padding: isPrimary ? "10px 16px" : "7px 13px",
     borderRadius: "24px",
     textDecoration: "none",
     boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-    opacity: "0.82",
+    opacity: baseOpacity,
     transition: "opacity 0.2s, transform 0.2s",
     cursor: "pointer",
     maxWidth: "300px",
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",
+    display: "block",
   });
 
   btn.addEventListener("mouseenter", () => {
@@ -305,10 +382,9 @@ function injectButton(label, href) {
     btn.style.transform = "scale(1.05)";
   });
   btn.addEventListener("mouseleave", () => {
-    btn.style.opacity = "0.82";
+    btn.style.opacity = baseOpacity;
     btn.style.transform = "scale(1)";
   });
 
-  document.body.appendChild(btn);
   return btn;
 }

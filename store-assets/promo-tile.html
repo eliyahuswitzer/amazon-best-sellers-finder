@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chrome Web Store Promo Tile — 440x280</title>
+<style>
+  body {
+    margin: 0;
+    padding: 40px;
+    background: #e5e5e5;
+    font-family: Arial, sans-serif;
+  }
+
+  /* THE ACTUAL TILE — exactly 440 × 280 px.
+     Right-click this element in DevTools → "Capture node screenshot"
+     to export at the exact dimensions Chrome Web Store wants. */
+  .tile {
+    width: 440px;
+    height: 280px;
+    background: linear-gradient(180deg, #232f3e 0%, #131a22 100%);
+    position: relative;
+    overflow: hidden;
+    box-sizing: border-box;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+
+  /* Orange circle with chart icon (top-left) */
+  .tile .icon {
+    position: absolute;
+    top: 78px;
+    left: 40px;
+    width: 86px;
+    height: 86px;
+    background: #ff9900;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 44px;
+    box-shadow: 0 4px 16px rgba(255, 153, 0, 0.4);
+  }
+
+  /* Title + subtitle */
+  .tile .title-block {
+    position: absolute;
+    left: 150px;
+    top: 82px;
+    right: 30px;
+  }
+  .tile .title {
+    color: #ffffff;
+    font-size: 32px;
+    font-weight: bold;
+    line-height: 1.05;
+    margin: 0;
+    letter-spacing: -0.5px;
+  }
+  .tile .title .accent {
+    color: #ff9900;
+  }
+  .tile .subtitle {
+    color: #cccccc;
+    font-size: 14px;
+    font-weight: normal;
+    margin: 10px 0 0 0;
+    letter-spacing: 0.2px;
+  }
+
+  /* Mock button at the bottom, matching the real extension button */
+  .tile .mock-button {
+    position: absolute;
+    bottom: 26px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #ff9900;
+    color: #111;
+    font-size: 13px;
+    font-weight: bold;
+    padding: 10px 18px;
+    border-radius: 24px;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+
+  /* Instructions below the tile — NOT part of the exported image */
+  .instructions {
+    max-width: 600px;
+    margin-top: 28px;
+    padding: 18px 22px;
+    background: white;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #333;
+    line-height: 1.55;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  }
+  .instructions h2 {
+    margin: 0 0 10px 0;
+    font-size: 15px;
+  }
+  .instructions ol {
+    margin: 0 0 0 20px;
+    padding: 0;
+  }
+  .instructions li {
+    margin-bottom: 6px;
+  }
+  .instructions code {
+    background: #f5f5f5;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: Consolas, Monaco, monospace;
+    font-size: 12px;
+  }
+  .instructions .note {
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: #fff8e1;
+    border-left: 3px solid #ff9900;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+  <div class="tile" id="promo-tile">
+    <div class="icon">📊</div>
+    <div class="title-block">
+      <div class="title">Best Sellers<br><span class="accent">Finder</span></div>
+      <div class="subtitle">for Amazon shoppers</div>
+    </div>
+    <div class="mock-button">📊 Best Sellers: Manual Toothbrushes</div>
+  </div>
+
+  <div class="instructions">
+    <h2>How to export this as a 440×280 PNG</h2>
+    <ol>
+      <li>Right-click anywhere on the orange/dark tile above and choose <strong>Inspect</strong>.</li>
+      <li>In DevTools, make sure the selected element is <code>&lt;div class="tile"&gt;</code>.</li>
+      <li>Right-click that element in the Elements panel.</li>
+      <li>Choose <strong>Capture node screenshot</strong>.</li>
+      <li>A PNG will download at exactly 440 × 280 pixels, ready to upload to the Chrome Web Store.</li>
+    </ol>
+    <div class="note">
+      <strong>Want to tweak the design?</strong> Edit the CSS in this file —
+      colors, text, positioning are all in the <code>.tile</code> rules at the top.
+      The title text lives in the <code>&lt;div class="title-block"&gt;</code> near
+      the bottom of the file.
+    </div>
+  </div>
+
+</body>
+</html>
