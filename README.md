@@ -21,7 +21,7 @@ A Chrome browser extension that detects the category you're browsing on Amazon a
 1. Go to `chrome://extensions/`
 2. Enable **Developer mode** (toggle in top-right)
 3. Click **"Load unpacked"**
-4. Select this folder (`amazon-bestsellers-extension`)
+4. Select this folder (`amazon-bestsellers`)
 5. The extension is now active — navigate to any Amazon search or product page
 
 ## How It Works
@@ -70,14 +70,15 @@ The output CSV is `.gitignore`'d since it regenerates on every run.
 ## File Structure
 
 ```
-amazon-bestsellers-extension/
+amazon-bestsellers/
 ├── manifest.json       # Chrome extension config (MV3)
 ├── content.js          # Injected into Amazon pages — detects category + shows button
 ├── popup.html          # Extension toolbar popup UI
 ├── popup.js            # Popup logic — queries content script for best sellers URL
-├── icons/
-│   ├── icon16.png
-│   ├── icon48.png
-│   └── icon128.png
+├── icons/              # 16 / 48 / 128 px extension icons
+├── misc/
+│   └── amazon_scrape.py    # Standalone Python scraper (see section below)
+├── store-assets/       # Chrome Web Store listing copy, privacy policy, promo tile, screenshots
+├── .gitignore
 └── README.md
 ```

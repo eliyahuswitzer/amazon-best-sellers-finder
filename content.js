@@ -7,6 +7,12 @@ const AFFILIATE_TAG = "andrewswitzer-20";
 const currentUrl = window.location.href;
 const isSearchPage = /\/s[\/?]/.test(currentUrl) || currentUrl.includes("field-keywords");
 const isProductPage = /\/dp\/[A-Z0-9]{10}/.test(currentUrl);
+// Browse-node pages (/b?node=…) are category pages we can resolve directly
+// from the node= param. Require the param so we don't render on vague /b
+// pages that lack one — guessing a category from those would be noise.
+const isBrowsePage =
+  /\/b[\/?]/.test(currentUrl) &&
+  !!new URLSearchParams(window.location.search).get("node");
 
 // Tracks the loading button's dot animation so renderStack() can cancel it
 // when real results arrive. Must be declared here (not next to renderStack
@@ -23,7 +29,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-if (isSearchPage || isProductPage) {
+if (isSearchPage || isProductPage || isBrowsePage) {
   init();
 }
 
@@ -44,8 +50,22 @@ async function getResult() {
   const fast = detectFromPage();
   if (fast) return fast;
 
-  // 2. For search pages: look at "Best Seller" badges on the results —
-  //    those are ground truth (Amazon itself is saying "this is #1 in X")
+  // 2a. Browse pages where path B couldn't find a dept in the DOM:
+  //     fetch a product from the page and pull the dept from its BSR.
+  if (isBrowsePage) {
+    const fromBrowse = await detectFromBrowsePage();
+    if (fromBrowse) return fromBrowse;
+  }
+
+  // 2b. Product pages where the live-DOM BSR scan found nothing:
+  //     re-fetch the product and try again against the server response.
+  if (isProductPage) {
+    const fromProduct = await detectFromProductPage();
+    if (fromProduct) return fromProduct;
+  }
+
+  // 2c. For search pages: look at "Best Seller" badges on the results —
+  //     those are ground truth (Amazon itself is saying "this is #1 in X")
   if (isSearchPage) {
     const fromBadges = await detectFromBadgedProducts();
     if (fromBadges) return fromBadges;
@@ -72,25 +92,106 @@ function detectFromPage() {
     };
   }
 
-  // B. Current URL has node= param
+  // B. Current URL has node= param.
+  //    `/gp/bestsellers/?node=XXX` alone does NOT resolve to the right
+  //    category on Amazon — it needs the department slug too. On browse
+  //    pages we try to find a zgbs / bestsellers link in the DOM whose
+  //    nodeId matches; that link's path gives us the dept. If nothing
+  //    matches, fall through so the async detectFromBrowsePage() can try
+  //    fetching a product page. For non-browse URLs with node= we keep
+  //    the deptless URL as a best-effort last resort.
   const nodeParam = new URLSearchParams(window.location.search).get("node");
   if (nodeParam) {
-    return {
-      url: `https://www.amazon.com/gp/bestsellers/?node=${nodeParam}&tag=${AFFILIATE_TAG}`,
-      label: null,
-      detected: true,
-    };
+    if (isBrowsePage) {
+      const match = findMatchingBestSellersLink(nodeParam);
+      if (match) {
+        return {
+          url: `https://www.amazon.com/gp/bestsellers/${match.dept}/${match.nodeId}?tag=${AFFILIATE_TAG}`,
+          label: extractBrowsePageLabel(),
+          detected: true,
+          nodeId: match.nodeId,
+          dept: match.dept,
+        };
+      }
+    } else {
+      return {
+        url: `https://www.amazon.com/gp/bestsellers/?node=${nodeParam}&tag=${AFFILIATE_TAG}`,
+        label: null,
+        detected: true,
+      };
+    }
   }
 
-  // C. Product page: look for zgbs links directly in the DOM
-  //    (Best Sellers Rank section links directly to the category zgbs page)
-  const zgbsLinks = document.querySelectorAll('a[href*="/zgbs/"]');
-  for (const a of zgbsLinks) {
-    const result = buildResultFromZgbsHref(a.href, a.innerText.trim());
-    if (result) return result;
+  // C. Product page: scan the BSR section in the live DOM.
+  //    Both /zgbs/ (older) and /gp/bestsellers/{dept}/{nodeId} (newer) are
+  //    valid BSR URL formats, so we match either. The async fallback in
+  //    detectFromProductPage() handles cases where the section hasn't
+  //    rendered by document_idle.
+  if (isProductPage) {
+    const fromBsr = extractBsrFromHtml(document.body.innerHTML);
+    if (fromBsr) return fromBsr;
   }
 
   return null;
+}
+
+// ─── BSR EXTRACTION (SHARED) ────────────────────────────────────────────────
+//
+// Given any Amazon product-page HTML (either from the live DOM or a fetch
+// response), isolate the "Best Sellers Rank" block and extract the most
+// specific (dept, nodeId) pair from it. Amazon lists BSR entries broad →
+// specific, so the LAST link in the block is the subcategory we want.
+
+function extractBsrFromHtml(html) {
+  const bsrMatch = html.match(/Best Sellers Rank[\s\S]{0,3000}/i);
+  if (!bsrMatch) return null;
+  const section = bsrMatch[0];
+
+  const urlRegex =
+    /href=['"][^'"]*(?:\/gp\/bestsellers|\/zgbs)\/([a-z][a-z-]*)\/(\d+)[^'"]*['"]/gi;
+  const urlMatches = [...section.matchAll(urlRegex)];
+  if (urlMatches.length === 0) return null;
+
+  const last = urlMatches[urlMatches.length - 1];
+  const dept = last[1];
+  const nodeId = last[2];
+
+  // Best-effort label: grab the anchor's inner text if it's a plain string.
+  // Some anchors have nested spans; in that case we accept a null label
+  // rather than returning garbage.
+  const withTextRegex =
+    /<a\s+[^>]*href=['"][^'"]*(?:\/gp\/bestsellers|\/zgbs)\/([a-z][a-z-]*)\/(\d+)[^'"]*['"][^>]*>\s*([^<]{1,80})\s*<\/a>/gi;
+  const withText = [...section.matchAll(withTextRegex)];
+  const labelEntry = withText.find((m) => m[1] === dept && m[2] === nodeId);
+  const label = labelEntry ? labelEntry[3].trim() : null;
+
+  return {
+    url: `https://www.amazon.com/gp/bestsellers/${dept}/${nodeId}?tag=${AFFILIATE_TAG}`,
+    label: label?.slice(0, 60) || null,
+    detected: true,
+    nodeId,
+    dept,
+  };
+}
+
+// Async fallback for product pages: fetch the canonical product URL and
+// re-run BSR extraction on the server response. Helps when the BSR block
+// is lazy-rendered after document_idle, or when the live DOM has been
+// mutated in a way that drops the BSR links.
+async function detectFromProductPage() {
+  const asin = window.location.pathname.match(/\/dp\/([A-Z0-9]{10})/)?.[1];
+  if (!asin) return null;
+  try {
+    const resp = await fetch(`https://www.amazon.com/dp/${asin}`, {
+      credentials: "include",
+      headers: { Accept: "text/html" },
+    });
+    if (!resp.ok) return null;
+    const html = await resp.text();
+    return extractBsrFromHtml(html);
+  } catch (e) {
+    return null;
+  }
 }
 
 // ─── BADGE-BASED DETECTION (SEARCH PAGES) ───────────────────────────────────
@@ -171,7 +272,7 @@ async function detectFromBadgedProducts() {
         //   /{slug}/zgbs/{dept}/{nodeId}/...      ← older "pretty" URL
         // Quotes can be single OR double. This regex handles all of that.
         const linkRegex =
-          /href=['"][^'"]*(?:\/gp\/bestsellers|\/zgbs)\/([a-z]+)\/(\d+)[^'"]*['"]/gi;
+          /href=['"][^'"]*(?:\/gp\/bestsellers|\/zgbs)\/([a-z][a-z-]*)\/(\d+)[^'"]*['"]/gi;
         const matches = [...bsrMatch[0].matchAll(linkRegex)];
         if (matches.length === 0) return null;
 
@@ -217,49 +318,92 @@ async function detectFromBadgedProducts() {
   };
 }
 
-// Parse a zgbs href into its components (still used by detectFromPage's
-// product-page path C, below).
-function parseZgbsHref(href) {
-  try {
-    const url = new URL(href);
-    const parts = url.pathname.split("/").filter(Boolean);
-    const zgbsIdx = parts.indexOf("zgbs");
-    if (zgbsIdx === -1) return null;
+// ─── BROWSE-PAGE DETECTION (/b?node=…) ─────────────────────────────────────
+//
+// Browse pages give us a nodeId via ?node= but no dept slug, and
+// `/gp/bestsellers/?node=XXX` on its own doesn't resolve to the right
+// category. So we need to find the dept for that nodeId from somewhere.
+//
+// Fast path (sync, in detectFromPage): scan the DOM for any link of the
+// form /zgbs/{dept}/{nodeId} or /gp/bestsellers/{dept}/{nodeId} whose
+// nodeId matches our target. Amazon often links to the category's Best
+// Sellers page somewhere on the browse page itself.
+//
+// Slow path (this function): fetch a handful of product pages listed on
+// the browse page and look at their Best Sellers Rank section. Every
+// product in the category has a BSR entry for the category's nodeId,
+// and that entry's link includes the dept slug.
 
-    const dept = parts[zgbsIdx + 1];
-    const nodeId = parts[zgbsIdx + 2];
-    if (!dept || !nodeId || !/^\d+$/.test(nodeId)) return null;
-
-    const rawSlug = parts[0] || "";
-    return { dept, nodeId, rawSlug };
-  } catch (e) {
-    return null;
+function findMatchingBestSellersLink(targetNodeId) {
+  const links = document.querySelectorAll(
+    'a[href*="/zgbs/"], a[href*="/gp/bestsellers/"]'
+  );
+  for (const a of links) {
+    const m = a.href.match(
+      /(?:\/gp\/bestsellers|\/zgbs)\/([a-z][a-z-]*)\/(\d+)/
+    );
+    if (m && m[2] === targetNodeId) {
+      return { dept: m[1], nodeId: m[2] };
+    }
   }
+  return null;
+}
+
+function extractBrowsePageLabel() {
+  // "/Laptop-Chargers-Adapters/b" → "Laptop Chargers Adapters"
+  const m = window.location.pathname.match(/^\/([^\/]+)\/b\/?$/);
+  return m ? m[1].replace(/-/g, " ") : null;
+}
+
+async function detectFromBrowsePage() {
+  const targetNode = new URLSearchParams(window.location.search).get("node");
+  if (!targetNode) return null;
+
+  // Sample up to 3 product ASINs from the browse page. Sponsored ads might
+  // be in other categories so their BSR won't mention our target node —
+  // we just skip those and try the next one.
+  const asins = [
+    ...new Set(
+      [...document.querySelectorAll("[data-asin]")]
+        .map((el) => el.dataset.asin)
+        .filter((a) => a && /^[A-Z0-9]{10}$/.test(a))
+    ),
+  ].slice(0, 3);
+
+  for (const asin of asins) {
+    try {
+      const resp = await fetch(`https://www.amazon.com/dp/${asin}`, {
+        credentials: "include",
+        headers: { Accept: "text/html" },
+      });
+      if (!resp.ok) continue;
+      const html = await resp.text();
+
+      const bsrMatch = html.match(/Best Sellers Rank[\s\S]{0,3000}/i);
+      if (!bsrMatch) continue;
+
+      const linkRegex =
+        /href=['"][^'"]*(?:\/gp\/bestsellers|\/zgbs)\/([a-z][a-z-]*)\/(\d+)[^'"]*['"]/gi;
+      const matches = [...bsrMatch[0].matchAll(linkRegex)];
+      const hit = matches.find((m) => m[2] === targetNode);
+      if (!hit) continue;
+
+      return {
+        url: `https://www.amazon.com/gp/bestsellers/${hit[1]}/${hit[2]}?tag=${AFFILIATE_TAG}`,
+        label: extractBrowsePageLabel(),
+        detected: true,
+        nodeId: hit[2],
+        dept: hit[1],
+      };
+    } catch (e) {
+      continue;
+    }
+  }
+
+  return null;
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
-
-// Given a zgbs URL, build our result object with affiliate tag
-function buildResultFromZgbsHref(href, linkText) {
-  const parsed = parseZgbsHref(href);
-  if (!parsed) return null;
-
-  const label =
-    linkText?.slice(0, 40) ||
-    parsed.rawSlug
-      .replace(/^Best-Sellers-?/i, "")
-      .replace(/-/g, " ")
-      .trim() ||
-    null;
-
-  return {
-    url: `https://www.amazon.com/${parsed.rawSlug}/zgbs/${parsed.dept}/${parsed.nodeId}?tag=${AFFILIATE_TAG}`,
-    label,
-    detected: true,
-    nodeId: parsed.nodeId,
-    dept: parsed.dept,
-  };
-}
 
 // Extract n:XXXXX node from rh= URL parameter
 function extractNodeFromRh(urlStr) {
