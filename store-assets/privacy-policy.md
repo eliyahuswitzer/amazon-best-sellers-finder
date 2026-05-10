@@ -55,4 +55,4 @@ URL, with a new "Last updated" date at the top.
 ## Contact
 
 Questions, bug reports, or feature requests:
-https://github.com/eliyahuswitzer/AmazonBestSellers
+https://github.com/eliyahuswitzer/amazon-best-sellers-finder
