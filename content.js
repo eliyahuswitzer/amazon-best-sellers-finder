@@ -4,6 +4,9 @@ const AFFILIATE_TAG = "andrewswitzer-20";
 
 // ─── SETUP ───────────────────────────────────────────────────────────────────
 
+// Dynamically detect which Amazon domain we're on (amazon.com, amazon.ca, etc.)
+const AMAZON_ORIGIN = window.location.origin; // e.g. "https://www.amazon.ca"
+
 const currentUrl = window.location.href;
 const isSearchPage = /\/s[\/?]/.test(currentUrl) || currentUrl.includes("field-keywords");
 const isProductPage = /\/dp\/[A-Z0-9]{10}/.test(currentUrl);
@@ -73,7 +76,7 @@ async function getResult() {
 
   // 3. Fallback: top-level Best Sellers
   return {
-    url: `https://www.amazon.com/gp/bestsellers/?tag=${AFFILIATE_TAG}`,
+    url: `${AMAZON_ORIGIN}/gp/bestsellers/?tag=${AFFILIATE_TAG}`,
     label: null,
     detected: false,
   };
@@ -86,7 +89,7 @@ function detectFromPage() {
   const rhNode = extractNodeFromRh(window.location.href);
   if (rhNode) {
     return {
-      url: `https://www.amazon.com/gp/bestsellers/?node=${rhNode.nodeId}&tag=${AFFILIATE_TAG}`,
+      url: `${AMAZON_ORIGIN}/gp/bestsellers/?node=${rhNode.nodeId}&tag=${AFFILIATE_TAG}`,
       label: null,
       detected: true,
     };
@@ -106,7 +109,7 @@ function detectFromPage() {
       const match = findMatchingBestSellersLink(nodeParam);
       if (match) {
         return {
-          url: `https://www.amazon.com/gp/bestsellers/${match.dept}/${match.nodeId}?tag=${AFFILIATE_TAG}`,
+          url: `${AMAZON_ORIGIN}/gp/bestsellers/${match.dept}/${match.nodeId}?tag=${AFFILIATE_TAG}`,
           label: extractBrowsePageLabel(),
           detected: true,
           nodeId: match.nodeId,
@@ -115,7 +118,7 @@ function detectFromPage() {
       }
     } else {
       return {
-        url: `https://www.amazon.com/gp/bestsellers/?node=${nodeParam}&tag=${AFFILIATE_TAG}`,
+        url: `${AMAZON_ORIGIN}/gp/bestsellers/?node=${nodeParam}&tag=${AFFILIATE_TAG}`,
         label: null,
         detected: true,
       };
@@ -166,7 +169,7 @@ function extractBsrFromHtml(html) {
   const label = labelEntry ? labelEntry[3].trim() : null;
 
   return {
-    url: `https://www.amazon.com/gp/bestsellers/${dept}/${nodeId}?tag=${AFFILIATE_TAG}`,
+    url: `${AMAZON_ORIGIN}/gp/bestsellers/${dept}/${nodeId}?tag=${AFFILIATE_TAG}`,
     label: label?.slice(0, 60) || null,
     detected: true,
     nodeId,
@@ -182,7 +185,7 @@ async function detectFromProductPage() {
   const asin = window.location.pathname.match(/\/dp\/([A-Z0-9]{10})/)?.[1];
   if (!asin) return null;
   try {
-    const resp = await fetch(`https://www.amazon.com/dp/${asin}`, {
+    const resp = await fetch(`${AMAZON_ORIGIN}/dp/${asin}`, {
       credentials: "include",
       headers: { Accept: "text/html" },
     });
@@ -253,7 +256,7 @@ async function detectFromBadgedProducts() {
   const resolved = await Promise.all(
     [...byCategory.entries()].map(async ([categoryName, { count, asin }]) => {
       try {
-        const resp = await fetch(`https://www.amazon.com/dp/${asin}`, {
+        const resp = await fetch(`${AMAZON_ORIGIN}/dp/${asin}`, {
           credentials: "include",
           headers: { Accept: "text/html" },
         });
@@ -305,7 +308,7 @@ async function detectFromBadgedProducts() {
 
   // Build URLs for the primary + up to 4 alternative categories (5 total).
   const toResult = (r) => ({
-    url: `https://www.amazon.com/gp/bestsellers/${r.dept}/${r.nodeId}?tag=${AFFILIATE_TAG}`,
+    url: `${AMAZON_ORIGIN}/gp/bestsellers/${r.dept}/${r.nodeId}?tag=${AFFILIATE_TAG}`,
     label: r.categoryName,
     nodeId: r.nodeId,
     dept: r.dept,
@@ -372,7 +375,7 @@ async function detectFromBrowsePage() {
 
   for (const asin of asins) {
     try {
-      const resp = await fetch(`https://www.amazon.com/dp/${asin}`, {
+      const resp = await fetch(`${AMAZON_ORIGIN}/dp/${asin}`, {
         credentials: "include",
         headers: { Accept: "text/html" },
       });
@@ -389,7 +392,7 @@ async function detectFromBrowsePage() {
       if (!hit) continue;
 
       return {
-        url: `https://www.amazon.com/gp/bestsellers/${hit[1]}/${hit[2]}?tag=${AFFILIATE_TAG}`,
+        url: `${AMAZON_ORIGIN}/gp/bestsellers/${hit[1]}/${hit[2]}?tag=${AFFILIATE_TAG}`,
         label: extractBrowsePageLabel(),
         detected: true,
         nodeId: hit[2],

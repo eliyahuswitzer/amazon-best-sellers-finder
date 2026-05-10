@@ -1,15 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Amazon Best Sellers Finder",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Instantly find the Best Sellers list for any category you're browsing on Amazon.",
   "permissions": [],
   "host_permissions": [
-    "https://www.amazon.com/*"
+    "https://www.amazon.com/*",
+    "https://www.amazon.ca/*"
   ],
   "content_scripts": [
     {
-      "matches": ["https://www.amazon.com/*"],
+      "matches": ["https://www.amazon.com/*", "https://www.amazon.ca/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }

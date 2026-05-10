@@ -12,7 +12,7 @@ chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
   }
 
   const url = tab.url;
-  if (!url.includes("amazon.com")) {
+  if (!url.match(/amazon\.(com|ca|co\.uk|de|fr|it|es|co\.jp|com\.au)/)) {
     setNotAmazon();
     return;
   }
@@ -45,11 +45,16 @@ function setNotAmazon() {
   status.textContent = "Not on Amazon — opens top Best Sellers.";
 }
 
+function getAmazonOrigin(url) {
+  try { return new URL(url).origin; } catch (e) { return "https://www.amazon.com"; }
+}
+
 function buildFallbackUrl(url) {
+  const origin = getAmazonOrigin(url);
   const params = new URLSearchParams(new URL(url).search);
   const node = params.get("node");
   if (node) {
-    return `https://www.amazon.com/gp/bestsellers/ref=zg_bs_nav/?node=${node}&tag=${AFFILIATE_TAG}`;
+    return `${origin}/gp/bestsellers/ref=zg_bs_nav/?node=${node}&tag=${AFFILIATE_TAG}`;
   }
-  return `https://www.amazon.com/gp/bestsellers/?tag=${AFFILIATE_TAG}`;
+  return `${origin}/gp/bestsellers/?tag=${AFFILIATE_TAG}`;
 }
