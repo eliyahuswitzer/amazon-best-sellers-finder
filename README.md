@@ -1,5 +1,11 @@
 # Amazon Best Sellers Finder
 
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/aejjhfjgodkggjoeacdcgghjjegkaeoi?label=Chrome%20Web%20Store&logo=googlechrome&logoColor=white&color=4285F4)](https://chromewebstore.google.com/detail/amazon-best-sellers-finde/aejjhfjgodkggjoeacdcgghjjegkaeoi)
+[![Chrome Web Store Users](https://img.shields.io/chrome-web-store/users/aejjhfjgodkggjoeacdcgghjjegkaeoi?label=Users&color=brightgreen)](https://chromewebstore.google.com/detail/amazon-best-sellers-finde/aejjhfjgodkggjoeacdcgghjjegkaeoi)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+[<img src="https://storage.googleapis.com/web-dev-uploads/image/WlD8wC6g8khYWPJUsQceQkhXSlv1/UV4C4ybeBTsZt43U4xis.png" alt="Available in the Chrome Web Store" height="58">](https://chromewebstore.google.com/detail/amazon-best-sellers-finde/aejjhfjgodkggjoeacdcgghjjegkaeoi)
+
 A Chrome browser extension that detects the category you're browsing on Amazon and gives you a one-click shortcut to the Best Sellers list for that category — with your Amazon Associates affiliate tag built in.
 
 > **Note:** This repo intentionally contains **two related-but-separate tools** that both work with Amazon Best Sellers data:
@@ -38,13 +44,12 @@ The tag is defined in **two places** — update both if you ever change your Ass
 - `content.js` — line 2: `const AFFILIATE_TAG = "andrewswitzer-20";`
 - `popup.js` — line 2: `const AFFILIATE_TAG = "andrewswitzer-20";`
 
-## Publishing to the Chrome Web Store
+## Publishing Updates to the Chrome Web Store
 
-1. Zip the entire folder contents (not the folder itself)
-2. Go to [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole)
-3. Pay the one-time $5 developer fee (if not already done)
-4. Upload the zip and fill in the listing details
-5. Submit for review (~1-3 days)
+1. Bump the `version` in `manifest.json`
+2. Zip the entire folder contents (not the folder itself)
+3. Go to [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole)
+4. Upload the new zip and submit for review (~1-3 days)
 
 ## Python Scraper
 
